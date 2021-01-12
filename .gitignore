@@ -1,0 +1,15 @@
+## clion files
+CMakeLists.txt
+cmake-build-debug/
+
+## binaries
+bin/rbdbgen
+bin/rbdbdump
+
+## database files
+*.tcd
+
+## rbdbdump files
+*.csv
+*.xlsx
+*.json

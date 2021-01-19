@@ -6,7 +6,8 @@ import (
 	"io/ioutil"
 	"os"
 	"path"
-	"rbdbtools/pkg/track"
+	"rbdbtools/pkg/database"
+	"rbdbtools/pkg/taglib"
 	"strings"
 )
 
@@ -14,7 +15,7 @@ type Cache struct {
 	location  string
 	rootPath  string
 	newPrefix string
-	cache     map[string]track.Track
+	cache     map[string]database.Track
 }
 
 func New(cacheLocation string, rootPath string, newPrefix string) (Cache, error) {
@@ -22,7 +23,7 @@ func New(cacheLocation string, rootPath string, newPrefix string) (Cache, error)
 		location:  cacheLocation,
 		rootPath:  rootPath,
 		newPrefix: newPrefix,
-		cache:     make(map[string]track.Track),
+		cache:     make(map[string]database.Track),
 	}
 	if _, err := os.Stat(cacheLocation); err == nil {
 		data, err := ioutil.ReadFile(cacheLocation)
@@ -42,14 +43,14 @@ func New(cacheLocation string, rootPath string, newPrefix string) (Cache, error)
 	}
 }
 
-func (c *Cache) Add(filenames ...string) ([]track.Track, error, int) {
+func (c *Cache) Add(filenames ...string) ([]database.Track, error, int) {
 	notRead := 0
 
 	if c.cache == nil {
-		return []track.Track{}, errors.New("cache not initialized"), notRead
+		return []database.Track{}, errors.New("cache not initialized"), notRead
 	}
 
-	tracks := make([]track.Track, 0)
+	tracks := make([]database.Track, 0)
 	newPaths := make(map[string]string)
 
 	filenamesToRead := make([]string, 0)
@@ -69,14 +70,14 @@ func (c *Cache) Add(filenames ...string) ([]track.Track, error, int) {
 	}
 
 	if len(filenamesToRead) > 0 {
-		tags, err := track.NewTracks(filenamesToRead...)
+		tags, err := taglib.NewTracks(filenamesToRead...)
 		if err != nil {
-			return []track.Track{}, errors.New("failed to get tags for cache"), notRead + (len(filenames) - len(tags))
+			return []database.Track{}, errors.New("failed to get tags for cache"), notRead + (len(filenames) - len(tags))
 		}
 
 		for _, t := range tags {
-			t.Filename = newPaths[t.Filename]
-			c.cache[t.Filename] = t
+			t.SetFilename(newPaths[t.Filename()])
+			c.cache[t.Filename()] = t
 			tracks = append(tracks, t)
 		}
 

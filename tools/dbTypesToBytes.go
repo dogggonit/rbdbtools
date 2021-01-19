@@ -16,7 +16,7 @@ func GetString(s string) []byte {
 	return []byte(s + "\x00")
 }
 
-func NumBytes(n uint32, bigEndian bool) []byte {
+func NumBytes(n int32, bigEndian bool) []byte {
 	if bigEndian {
 		return []byte{byte((n >> (8 * 3)) & 0xFF), byte((n >> (8 * 2)) & 0xFF), byte((n >> (8)) & 0xFF), byte(n & 0xFF)}[:4]
 	}

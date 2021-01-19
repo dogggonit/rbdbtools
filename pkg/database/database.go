@@ -2,150 +2,158 @@ package database
 
 import (
 	"errors"
-	"io/ioutil"
-	"os"
-	"path"
-	"rbdbtools/pkg/track"
-	"rbdbtools/tools"
-	"sort"
-	"strings"
+	"fmt"
+)
+
+const (
+	CurrentVersion = 0x5443480F
+	Untagged       = "<Untagged>"
 )
 
 type Database struct {
-	index     []track.Track
-	files     map[string][]byte
-	modified  bool
-	bigEndian bool
+	Databases [NumStringEntries][]byte
+	Idx       []byte
 }
 
-func New(bigEndian bool) Database {
-	return Database{
-		index:     make([]track.Track, 0),
-		bigEndian: bigEndian,
-		modified:  true,
-	}
-}
-
-func (d *Database) Add(tracks ...track.Track) {
-	d.modified = true
-	d.index = append(d.index, tracks...)
-}
-
-func (d *Database) Save(targetDir string) error {
-	if targetDir == "" {
-		return errors.New("target must be specified")
-	} else if !tools.DirExists(targetDir) {
-		return errors.New("target directory does not exist")
-	}
-
-	for k, v := range d.compile() {
-		err := ioutil.WriteFile(path.Join(targetDir, k), v, os.ModePerm)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (d *Database) Size() int {
-	size := 0
-	for _, v := range d.compile() {
-		size += len(v)
-	}
-	return size
-}
-
-type Stats struct {
-	Size   int
-	Header HeaderData
-}
-
-type HeaderData struct {
+type Header struct {
+	Endian  Endian
+	Magic   int32
 	Size    int
 	Entries int
 }
 
-func (d *Database) Entries() map[string]Stats {
-	counts := make(map[string]Stats)
+type Idx struct {
+	Header   Header
+	Serial   int32
+	CommitId int32
+	Dirty    int32
+}
 
-	for k, v := range d.compile() {
-		s := Stats{
-			Size: len(v),
-			Header: HeaderData{
-				Size:    int(tools.BytesNum(v[4:8], d.bigEndian)),
-				Entries: int(tools.BytesNum(v[8:12], d.bigEndian)),
-			},
-		}
+type TagCacheFiles map[string][]byte
 
-		switch k {
-		case "database_0.tcd":
-			counts["artists"] = s
-		case "database_1.tcd":
-			counts["albums"] = s
-		case "database_2.tcd":
-			counts["genres"] = s
-		case "database_3.tcd":
-			counts["tracks"] = s
-		case "database_5.tcd":
-			counts["composers"] = s
-		case "database_6.tcd":
-			counts["comments"] = s
-		case "database_7.tcd":
-			counts["album artists"] = s
-		case "database_8.tcd":
-			counts["groupings"] = s
-		case "database_idx.tcd":
-			counts["index"] = s
+func New(endian Endian) Database {
+	db := Database{}
+	ForEachTagCache(func(cache TagCache) {
+		if cache == Index {
+			db.Idx, _ = (&Idx{
+				Header: Header{
+					Endian:  endian,
+					Magic:   CurrentVersion,
+					Size:    0,
+					Entries: 0,
+				},
+				Serial:   0,
+				CommitId: 1,
+				Dirty:    0,
+			}).MarshalBinary()
+		} else {
+			db.Databases[cache], _ = (&Header{
+				Endian:  endian,
+				Magic:   CurrentVersion,
+				Size:    0,
+				Entries: 0,
+			}).MarshalBinary()
 		}
+	})
+	return db
+}
+
+func (tcf *TagCacheFiles) ToDatabase() (*Database, error) {
+	db := &Database{}
+	missing := make([]string, 0, NumStringEntries+1)
+	noHeader := make([]string, 0, NumStringEntries+1)
+
+	ForEachTagCache(func(cache TagCache) {
+		d, e := map[string][]byte(*tcf)[cache.Filename()]
+		if !e {
+			db = nil
+			missing = append(missing, cache.String())
+		} else if cache == Index {
+			if len(d) < 24 {
+				noHeader = append(noHeader, cache.String())
+			} else {
+				db.Idx = make([]byte, len(d))
+				copy(db.Idx, d)
+			}
+		} else {
+			if len(d) < 12 {
+				noHeader = append(noHeader, cache.String())
+			} else {
+				db.Databases[cache] = make([]byte, len(d))
+				copy(db.Databases[cache], d)
+			}
+		}
+	})
+
+	if len(missing) > 0 {
+		return nil, errors.New(fmt.Sprintf("missing databases: %s", missing))
+	}
+	if len(noHeader) > 0 {
+		return nil, errors.New(fmt.Sprintf("databases that have no header: %s", noHeader))
 	}
 
-	return counts
+	return db, nil
 }
 
-func (d *Database) Tracks() []track.Track {
-	return d.index
+func (db *Database) ToTagCacheFiles() TagCacheFiles {
+	f := make(map[string][]byte)
+	f[Index.Filename()] = db.Idx
+	f[Index.Filename()] = make([]byte, len(db.Idx))
+	copy(f[Index.Filename()], db.Idx)
+	for i := 0; i < NumStringEntries; i++ {
+		f[TagCache(i).Filename()] = make([]byte, len(db.Databases[i]))
+		copy(f[TagCache(i).Filename()], db.Databases[i])
+	}
+	return f
 }
 
-func (d *Database) sort() {
-	ut := "<Untagged>"
-	sort.Slice(d.index, func(i, j int) bool {
-		s1 := strings.ToLower(d.index[i].Artist)
-		if s1 == ut {
-			return true
-		}
-		s2 := strings.ToLower(d.index[j].Artist)
+func (header *Header) UnmarshalBinary(data []byte) error {
+	if len(data) < 12 {
+		return errors.New("no header exists")
+	}
+	header.Endian = string(data[0]) == "T"
+	header.Magic = header.Endian.BytesNum(data[:4])
+	header.Size = int(header.Endian.BytesNum(data[4:8]))
+	header.Entries = int(header.Endian.BytesNum(data[8:12]))
+	return nil
+}
 
-		if s1 == s2 {
-			i1 := d.index[i].Year
-			i2 := d.index[j].Year
+func (header *Header) MarshalBinary() (data []byte, err error) {
+	data = header.Endian.NumBytes(header.Magic)
+	data = append(data, header.Endian.NumBytes(int32(header.Size))...)
+	data = append(data, header.Endian.NumBytes(int32(header.Entries))...)
+	return data, nil
+}
 
-			if i1 == i2 {
-				s1 = strings.ToLower(d.index[i].Album)
-				if s1 == ut {
-					return true
-				}
-				s2 = strings.ToLower(d.index[j].Album)
+func (idx *Idx) UnmarshalBinary(data []byte) error {
+	if len(data) < 24 {
+		return errors.New("no header exists")
+	}
+	_ = (&idx.Header).UnmarshalBinary(data)
+	idx.Serial = idx.Header.Endian.BytesNum(data[12:16])
+	idx.CommitId = idx.Header.Endian.BytesNum(data[16:20])
+	idx.Dirty = idx.Header.Endian.BytesNum(data[20:24])
+	return nil
+}
 
-				if s1 == s2 {
-					i1 = d.index[i].Track
-					i2 = d.index[j].Track
+func (idx *Idx) MarshalBinary() (data []byte, err error) {
+	data, _ = idx.Header.MarshalBinary()
+	data = append(data, idx.Header.Endian.NumBytes(idx.Serial)...)
+	data = append(data, idx.Header.Endian.NumBytes(idx.CommitId)...)
+	data = append(data, idx.Header.Endian.NumBytes(idx.Dirty)...)
+	return data, nil
+}
 
-					if i1 == i2 {
-						s1 = strings.ToLower(d.index[i].Title)
-						if s1 == ut {
-							return true
-						}
-						s2 = strings.ToLower(d.index[j].Title)
+func (db *Database) GetHeader(t TagCache) (*Header, error) {
+	if t > Grouping {
+		return nil, errors.New("invalid database")
+	}
 
-						return s1 < s2 // By track name
-					}
-					return i1 < i2 // By track number
-				}
-				return s1 < s2 // By album
-			}
-			return i1 < i2 // By year
-		}
-		return s1 < s2 // By artist
-	})
+	var header Header
+	err := header.UnmarshalBinary(db.Databases[t])
+	if err != nil {
+		return nil, err
+	}
+
+	return &header, nil
 }

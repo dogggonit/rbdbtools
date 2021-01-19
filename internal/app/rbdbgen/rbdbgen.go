@@ -8,7 +8,6 @@ import (
 	"rbdbtools/pkg/cache"
 	"rbdbtools/pkg/database"
 	"rbdbtools/pkg/logger"
-	"rbdbtools/pkg/track"
 	"rbdbtools/tools"
 	"regexp"
 	"time"
@@ -154,8 +153,8 @@ func getTracks(root string) ([]string, error) {
 	return tracks, err
 }
 
-func getTags(tracks []string, cache cache.Cache) ([]track.Track, error) {
-	t := make([]track.Track, 0)
+func getTags(tracks []string, cache cache.Cache) ([]database.Track, error) {
+	t := make([]database.Track, 0)
 	for i := 0; i < len(tracks); {
 		end := int(math.Min(float64(len(tracks)), float64(i+getTrackIncrement)))
 

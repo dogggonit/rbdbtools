@@ -3,6 +3,8 @@ package database
 import (
 	"errors"
 	"fmt"
+	"io/ioutil"
+	"path"
 )
 
 const (
@@ -33,7 +35,7 @@ type TagCacheFiles map[string][]byte
 
 func New(endian Endian) Database {
 	db := Database{}
-	ForEachTagCache(func(cache TagCache) {
+	_ = ForEachTagCache(func(cache TagCache) error {
 		if cache == Index {
 			db.Idx, _ = (&Idx{
 				Header: Header{
@@ -54,6 +56,7 @@ func New(endian Endian) Database {
 				Entries: 0,
 			}).MarshalBinary()
 		}
+		return nil
 	})
 	return db
 }
@@ -63,7 +66,7 @@ func (tcf *TagCacheFiles) ToDatabase() (*Database, error) {
 	missing := make([]string, 0, NumStringEntries+1)
 	noHeader := make([]string, 0, NumStringEntries+1)
 
-	ForEachTagCache(func(cache TagCache) {
+	_ = ForEachTagCache(func(cache TagCache) error {
 		d, e := map[string][]byte(*tcf)[cache.Filename()]
 		if !e {
 			db = nil
@@ -83,6 +86,7 @@ func (tcf *TagCacheFiles) ToDatabase() (*Database, error) {
 				copy(db.Databases[cache], d)
 			}
 		}
+		return nil
 	})
 
 	if len(missing) > 0 {
@@ -105,6 +109,24 @@ func (db *Database) ToTagCacheFiles() TagCacheFiles {
 		copy(f[TagCache(i).Filename()], db.Databases[i])
 	}
 	return f
+}
+
+func GetTagCacheFiles(dir string) (TagCacheFiles, error) {
+	tcf := make(map[string][]byte)
+
+	if err := ForEachTagCache(func(cache TagCache) error {
+		b, err := ioutil.ReadFile(path.Join(dir, cache.Filename()))
+		if err != nil {
+			return err
+		}
+
+		tcf[cache.Filename()] = b
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	return tcf, nil
 }
 
 func (header *Header) UnmarshalBinary(data []byte) error {
@@ -145,7 +167,7 @@ func (idx *Idx) MarshalBinary() (data []byte, err error) {
 }
 
 func (db *Database) GetHeader(t TagCache) (*Header, error) {
-	if t > Grouping {
+	if t > Index {
 		return nil, errors.New("invalid database")
 	}
 
@@ -155,5 +177,14 @@ func (db *Database) GetHeader(t TagCache) (*Header, error) {
 		return nil, err
 	}
 
+	return &header, nil
+}
+
+func (db *Database) GetIdxHeader() (*Idx, error) {
+	header := Idx{}
+	err := header.UnmarshalBinary(db.Idx)
+	if err != nil {
+		return nil, err
+	}
 	return &header, nil
 }

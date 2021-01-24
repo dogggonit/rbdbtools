@@ -1,6 +1,11 @@
 package database
 
-import "time"
+import (
+	"errors"
+	"sort"
+	"strings"
+	"time"
+)
 
 const (
 	Year = IdxEntry(iota + Grouping)
@@ -108,8 +113,12 @@ func (db *Database) GetIndexEntryByIndex(idx int) (*IndexEntry, error) {
 	entry.Flag.TrkNumGen = flag&(1<<3) > 0
 	entry.Flag.Resurrected = flag&(1<<4) > 0
 
-	entry.MTime = time.Unix(0, int64(entry.IntEntries[Mtime])*int64(1000000))
+	entry.MTime = millisecondsToTime(entry.IntEntries[Mtime])
 	return entry, nil
+}
+
+func millisecondsToTime(ms int32) time.Time {
+	return time.Unix(0, int64(ms)*int64(1000000))
 }
 
 func (db *Database) GetIndexEntries() ([]IndexEntry, error) {
@@ -133,8 +142,25 @@ func (db *Database) GetIndexEntries() ([]IndexEntry, error) {
 
 func (db *Database) DefaultSortIndex() error {
 	return db.SortIndex(func(e1, e2 IndexEntry) bool {
-		// TODO
-		return false
+		s1 := strings.ToLower(e1.AlbumArtist())
+		s2 := strings.ToLower(e2.AlbumArtist())
+		if s1 == s2 {
+			if e1.Year() == e2.Year() {
+				s1 = strings.ToLower(e1.Album())
+				s2 = strings.ToLower(e2.Album())
+				if s1 == s2 {
+					if e1.Track() == e2.Track() {
+						s1 = strings.ToLower(e1.Grouping())
+						s2 = strings.ToLower(e2.Grouping())
+						return s1 < s2
+					}
+					return e1.Track() < e2.Track()
+				}
+				return s1 < s2
+			}
+			return e1.Year() < e2.Year()
+		}
+		return s1 < s2
 	})
 }
 
@@ -148,71 +174,254 @@ func (db *Database) SortIndex(less func(e1, e2 IndexEntry) bool) error {
 		return nil
 	}
 
-	// TODO
+	dbBak := Database{}
+	dbBak.Idx = make([]byte, 24, len(db.Idx))
+	copy(dbBak.Idx, db.Idx[:24])
+	dbBak.Databases[Filename] = make([]byte, len(db.Databases[Filename]))
+	copy(dbBak.Databases[Filename], db.Databases[Filename])
+	dbBak.Databases[Title] = make([]byte, len(db.Databases[Title]))
+	copy(dbBak.Databases[Title], db.Databases[Title])
+
+	sort.Slice(entries, func(i, j int) bool {
+		return less(entries[i], entries[j])
+	})
+
+	for i, e := range entries {
+		b, err := e.MarshalBinary()
+		if err != nil {
+			return err
+		}
+		dbBak.Idx = append(dbBak.Idx, b...)
+
+		idx := e.Header.Header.Endian.NumBytes(int32(i))
+
+		o := e.IntEntries[Title]
+		dbBak.Databases[Title] = append(dbBak.Databases[Title][:o+4], append(idx, dbBak.Databases[Title][o+8:]...)...)
+
+		o = e.IntEntries[Filename]
+		dbBak.Databases[Filename] = append(dbBak.Databases[Filename][:o+4], append(idx, dbBak.Databases[Filename][o+8:]...)...)
+	}
+
+	err = dbBak.DefaultSortTags(Filename)
+	if err != nil {
+		return err
+	}
+
+	db.Idx = dbBak.Idx
+	db.Databases[Title] = dbBak.Databases[Title]
+	db.Databases[Filename] = dbBak.Databases[Filename]
 
 	return nil
 }
 
-func (i IndexEntry) Artist() string {
-	return i.Tags[Artist]
+func (db *Database) AppendTracks(tracks ...MetaData) ([]IndexEntry, error) {
+	idx, err := db.GetIdxHeader()
+	if err != nil {
+		return nil, err
+	}
+
+	var entries []IndexEntry
+	for _, t := range tracks {
+		idxEntry, err := db.AppendTrack(t)
+		if err != nil {
+			return nil, err
+		}
+
+		idxEntry.Header = idx
+		entries = append(entries, *idxEntry)
+	}
+
+	newIdx, err := db.GetIdxHeader()
+	if err != nil {
+		return nil, err
+	}
+
+	idx.Header = newIdx.Header
+
+	idx.CommitId++
+	ci := idx.Header.Endian.NumBytes(idx.CommitId)
+	db.Idx = append(db.Idx[:16], append(ci, db.Idx[20:]...)...)
+
+	return entries, nil
 }
 
-func (i IndexEntry) Album() string {
-	return i.Tags[Album]
+// AppendTrack adds a track to the database.
+func (db *Database) AppendTrack(t MetaData) (*IndexEntry, error) {
+	header, err := db.GetIdxHeader()
+	if err != nil {
+		return nil, err
+	}
+
+	idxEntry := IndexEntry{
+		Header: header,
+	}
+
+	stringTags := []string{t.Artist(), t.Album(), t.Genre(), t.Title(), t.Filename(), t.Composer(), t.Comment(), t.AlbumArtist(), t.Grouping()}
+
+	for i := 0; i < NumIdxEntries; i++ {
+		switch {
+		case TagCache(i) <= Grouping:
+			tag, err := db.AppendTag(TagCache(i), stringTags[i])
+
+			if err != nil {
+				return nil, err
+			}
+
+			idxEntry.Tags[i] = tag.TagData
+			idxEntry.IntEntries[i] = int32(tag.Offset)
+		case IdxEntry(i) == Year:
+			idxEntry.IntEntries[i] = t.Year()
+		case IdxEntry(i) == Disc:
+			idxEntry.IntEntries[i] = t.Disc()
+		case IdxEntry(i) == Track:
+			idxEntry.IntEntries[i] = t.Track()
+		case IdxEntry(i) == Bitrate:
+			idxEntry.IntEntries[i] = t.Bitrate()
+		case IdxEntry(i) == Length:
+			idxEntry.IntEntries[i] = t.Length()
+		case IdxEntry(i) == Mtime:
+			idxEntry.IntEntries[i] = t.Mtime()
+		}
+	}
+
+	idxEntry.MTime = millisecondsToTime(idxEntry.IntEntries[Mtime])
+	idxEntry.Index = int32(header.Header.Entries) + 1
+
+	data, err := idxEntry.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+
+	db.Idx = append(db.Idx, data...)
+
+	return &idxEntry, nil
 }
 
-func (i IndexEntry) Genre() string {
-	return i.Tags[Genre]
+func (db *Database) DeleteIndexEntry(idx int) (*IndexEntry, error) {
+	e, err := db.GetIndexEntryByIndex(idx)
+	if err != nil {
+		return nil, err
+	}
+
+	dbBak := Database{}
+	dbBak.Idx = make([]byte, len(db.Idx))
+	copy(dbBak.Idx, db.Idx)
+	dbBak.Databases[Filename] = make([]byte, len(db.Databases[Filename]))
+	copy(dbBak.Databases[Filename], db.Databases[Filename])
+	dbBak.Databases[Title] = make([]byte, len(db.Databases[Title]))
+	copy(dbBak.Databases[Title], db.Databases[Title])
+
+	newHeader := Idx{}
+	err = newHeader.UnmarshalBinary(db.Idx)
+	newHeader.Header.Entries--
+	newHeader.Header.Size -= 23*4
+	b, err := newHeader.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	dbBak.Idx = append(b, dbBak.Idx[24:]...)
+
+	// TODO remove the index entry
+	// TODO delete Title and Filename entries
+	// TODO update index values in Title and Filename databases
+	// TODO check other tags used, and if they are unused remove them
+	// TODO reassign databases back to db
+
+	return e, nil
 }
 
-func (i IndexEntry) Title() string {
-	return i.Tags[Title]
+func (ie *IndexEntry) MarshalBinary() (data []byte, err error) {
+	if ie.Header == nil {
+		return nil, errors.New("no header set in IndexEntry")
+	}
+
+	for _, e := range ie.IntEntries {
+		data = append(data, ie.Header.Header.Endian.NumBytes(e)...)
+	}
+
+	data = append(data, ie.Header.Header.Endian.NumBytes(ie.Int32Flag())...)
+	return
 }
 
-func (i IndexEntry) Filename() string {
-	return i.Tags[Filename]
+func (ie *IndexEntry) Int32Flag() (flag int32) {
+	flag = int32(ie.Flag.High) << 16
+
+	switch {
+	case ie.Flag.Deleted:
+		flag |= 0x1
+	case ie.Flag.DirCache:
+		flag |= 0x2
+	case ie.Flag.DirtyNum:
+		flag |= 0x4
+	case ie.Flag.TrkNumGen:
+		flag |= 0x8
+	case ie.Flag.Resurrected:
+		flag |= 0x10
+	}
+
+	return
 }
 
-func (i IndexEntry) SetFilename(_ string) {
+func (ie *IndexEntry) Artist() string {
+	return ie.Tags[Artist]
+}
+
+func (ie *IndexEntry) Album() string {
+	return ie.Tags[Album]
+}
+
+func (ie *IndexEntry) Genre() string {
+	return ie.Tags[Genre]
+}
+
+func (ie *IndexEntry) Title() string {
+	return ie.Tags[Title]
+}
+
+func (ie *IndexEntry) Filename() string {
+	return ie.Tags[Filename]
+}
+
+func (ie *IndexEntry) SetFilename(_ string) {
 	// No op
 }
 
-func (i IndexEntry) Composer() string {
-	return i.Tags[Composer]
+func (ie *IndexEntry) Composer() string {
+	return ie.Tags[Composer]
 }
 
-func (i IndexEntry) Comment() string {
-	return i.Tags[Comment]
+func (ie *IndexEntry) Comment() string {
+	return ie.Tags[Comment]
 }
 
-func (i IndexEntry) AlbumArtist() string {
-	return i.Tags[AlbumArtist]
+func (ie *IndexEntry) AlbumArtist() string {
+	return ie.Tags[AlbumArtist]
 }
 
-func (i IndexEntry) Grouping() string {
-	return i.Tags[Grouping]
+func (ie *IndexEntry) Grouping() string {
+	return ie.Tags[Grouping]
 }
 
-func (i IndexEntry) Year() int32 {
-	return i.IntEntries[Year]
+func (ie *IndexEntry) Year() int32 {
+	return ie.IntEntries[Year]
 }
 
-func (i IndexEntry) Disc() int32 {
-	return i.IntEntries[Disc]
+func (ie *IndexEntry) Disc() int32 {
+	return ie.IntEntries[Disc]
 }
 
-func (i IndexEntry) Track() int32 {
-	return i.IntEntries[Track]
+func (ie *IndexEntry) Track() int32 {
+	return ie.IntEntries[Track]
 }
 
-func (i IndexEntry) Bitrate() int32 {
-	return i.IntEntries[Bitrate]
+func (ie *IndexEntry) Bitrate() int32 {
+	return ie.IntEntries[Bitrate]
 }
 
-func (i IndexEntry) Length() int32 {
-	return i.IntEntries[Length]
+func (ie *IndexEntry) Length() int32 {
+	return ie.IntEntries[Length]
 }
 
-func (i IndexEntry) Mtime() int32 {
-	return i.IntEntries[Mtime]
+func (ie *IndexEntry) Mtime() int32 {
+	return ie.IntEntries[Mtime]
 }

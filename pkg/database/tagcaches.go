@@ -13,8 +13,11 @@ const (
 	Index
 )
 
+// TagCache represents one of the 10 databases rockbox uses.
 type TagCache uint
 
+// String returns the string representation of the given TagCache,
+// or an empty string if it is not a valid TagCache.
 func (st TagCache) String() string {
 	switch st {
 	case Artist:
@@ -42,6 +45,8 @@ func (st TagCache) String() string {
 	}
 }
 
+// String returns the filename representation of the given TagCache,
+// or an empty string if it is not a valid TagCache.
 func (st TagCache) Filename() string {
 	switch st {
 	case Artist:
@@ -69,9 +74,17 @@ func (st TagCache) Filename() string {
 	}
 }
 
-func ForEachTagCache(consumer func(cache TagCache)) {
-	for i := 0; i < NumStringEntries; i++ {
-		consumer(TagCache(i))
+// ForEachTagCache cycles through each database and allow a function to be run on it.
+func ForEachTagCache(consumer func(cache TagCache) error) error {
+	err := consumer(Index)
+	if err != nil {
+		return err
 	}
-	consumer(Index)
+	for i := 0; i < NumStringEntries; i++ {
+		err := consumer(TagCache(i))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

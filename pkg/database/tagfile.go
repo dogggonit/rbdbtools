@@ -17,6 +17,24 @@ type TagFileEntry struct {
 	TagCache TagCache
 }
 
+func (db *Database) DeleteTagFileEntryByString(t TagCache, s string) (*TagFileEntry, error) {
+	// TODO
+	panic("not implemented")
+}
+
+func (db *Database) DeleteTagFileEntryByIndex(t TagCache, idx int) (*TagFileEntry, error) {
+	// TODO
+	panic("not implemented")
+}
+
+func (db *Database) DeleteTagFileEntryByOffset(t TagCache, offset int) (*TagFileEntry, error) {
+	// TODO
+	panic("not implemented")
+}
+
+// GetTagFileEntryByString attempts to find an existing TagFileEntry by string int the given TagCache.
+// If there is an error during search (nil, error) will be returned.
+// If no entry is found (nil, nil) will be returned.
 func (db *Database) GetTagFileEntryByString(t TagCache, s string) (*TagFileEntry, error) {
 	for i := 12; i < len(db.Databases[t]); {
 		entry, err := db.GetTagFileEntryByOffset(t, i)
@@ -30,9 +48,12 @@ func (db *Database) GetTagFileEntryByString(t TagCache, s string) (*TagFileEntry
 		i += 8 + int(entry.Length)
 	}
 
-	return nil, errors.New(fmt.Sprintf("entry for %s not found", s))
+	return nil, nil
 }
 
+// GetTagFileEntryByIndex attempts to find an existing TagFileEntry entry by index in the TagCache starting at 0.
+// If there is an error during search (nil, error) will be returned.
+// If no entry is found (nil, nil) will be returned.
 func (db *Database) GetTagFileEntryByIndex(t TagCache, idx int) (*TagFileEntry, error) {
 	for i, index := 0, 0; i < len(db.Databases[t]) && index < idx; index++ {
 		entry, err := db.GetTagFileEntryByOffset(t, i)
@@ -46,9 +67,11 @@ func (db *Database) GetTagFileEntryByIndex(t TagCache, idx int) (*TagFileEntry, 
 		i += 8 + int(entry.Length)
 	}
 
-	return nil, errors.New(fmt.Sprintf("could not find index %d", idx))
+	return nil, nil
 }
 
+// GetTagFileEntryByOffset attempts to find an existing TagFileEntry by offset.
+// If there is an error during search (nil, error) will be returned.
 func (db *Database) GetTagFileEntryByOffset(t TagCache, offset int) (*TagFileEntry, error) {
 	header, err := db.GetHeader(t)
 	if err != nil {
@@ -69,12 +92,21 @@ func (db *Database) GetTagFileEntryByOffset(t TagCache, offset int) (*TagFileEnt
 	return &entry, nil
 }
 
-func (db *Database) AddTag(t TagCache, tag string) (offset int) {
+// AppendTag appends a tag to the end of the given TagCache.
+func (db *Database) AppendTag(t TagCache, tag string) (*TagFileEntry, error) {
+	if t != Filename && t != Title {
+		if entry, err := db.GetTagFileEntryByString(t, tag); err != nil {
+			return nil, err
+		} else if entry != nil {
+			return entry, nil
+		}
+	}
+
 	header, err := db.GetHeader(t)
 	if err != nil {
-		return -1
+		return nil, err
 	}
-	offset = len(db.Databases[t])
+	offset := len(db.Databases[t])
 
 	data := header.Endian.NumBytes(-1)
 
@@ -88,14 +120,20 @@ func (db *Database) AddTag(t TagCache, tag string) (offset int) {
 		data = append(data, []byte("XXXXXXXXX")[:l]...)
 	}
 	data = append(header.Endian.NumBytes(int32(len(data)-4)), data...)
-	return
+
+	db.Databases[t] = append(db.Databases[t], data...)
+	headerUpdate := header.Endian.NumBytes(int32(len(db.Databases[t]) - 12))
+	headerUpdate = append(headerUpdate, header.Endian.NumBytes(int32(header.Entries)+1)...)
+	db.Databases[t] = append(db.Databases[t][:4], append(headerUpdate, db.Databases[t][12:]...)...)
+
+	return db.GetTagFileEntryByOffset(t, offset)
 }
 
+// GetAllTags returns a slice of all the tags in a given TagCache.
 func (db *Database) GetAllTags(t TagCache) ([]TagFileEntry, error) {
 	header, err := db.GetHeader(t)
 	if err != nil {
 		return nil, err
-
 	}
 
 	entries := make([]TagFileEntry, 0, header.Entries)
@@ -115,6 +153,11 @@ func (db *Database) GetAllTags(t TagCache) ([]TagFileEntry, error) {
 	return entries, nil
 }
 
+// DefaultSortTags sorts the tags in a given TagCache.
+// The untagged value will be sorted to the front of the TagCache,
+// and then all other tags are compared by their lowercase value.
+// If the TagCache is the Filename TagCache, it will be sorted
+// by TagFileEntry.IdxId.
 func (db *Database) DefaultSortTags(t TagCache) error {
 	return db.SortTags(t, func(e1, e2 TagFileEntry) bool {
 		if e1.TagData == Untagged {
@@ -128,6 +171,8 @@ func (db *Database) DefaultSortTags(t TagCache) error {
 	})
 }
 
+// SortTags sorts the tags in a given TagCache using the given less function.
+// The less function compares two TagFileEntry and should return true if e1<e2.
 func (db *Database) SortTags(t TagCache, less func(e1, e2 TagFileEntry) bool) error {
 	if len(db.Idx) < 24 {
 		return errors.New("no header in database file")
@@ -185,6 +230,8 @@ func (db *Database) SortTags(t TagCache, less func(e1, e2 TagFileEntry) bool) er
 	return nil
 }
 
+// MarshalBinary returns the binary version of a TagFileEntry.
+// The Header in the TagFileEntry must be set.
 func (tfe *TagFileEntry) MarshalBinary() (data []byte, err error) {
 	if tfe.Header == nil {
 		return nil, errors.New("no header set in TagFileEntry")
@@ -207,6 +254,12 @@ func (tfe *TagFileEntry) MarshalBinary() (data []byte, err error) {
 	return append(tfe.Header.Endian.NumBytes(int32(len(tag))), append(data, tag...)...), nil
 }
 
+// UnmarshalBinary reads a given slice of bytes into a TagFileEntry.
+// The TagFileEntry must have it's header set.
+// A valid tag cache entry in byte form must have a four byte field for the length of the data,
+// followed by another four byte field for the index in the master index (only used by the Filename and
+// Title TagCache, all others are set to 0xFFFFFFFF), and then a data portion.
+// The data portion must end in a null byte, but may have up to seven 'X' characters after it as padding.
 func (tfe *TagFileEntry) UnmarshalBinary(data []byte) error {
 	if tfe.Header == nil {
 		return errors.New("no header set in TagFileEntry")
@@ -218,6 +271,10 @@ func (tfe *TagFileEntry) UnmarshalBinary(data []byte) error {
 
 	tfe.Length = tfe.Header.Endian.BytesNum(data[:4])
 	tfe.IdxId = tfe.Header.Endian.BytesNum(data[4:8])
+
+	if int(tfe.Length)+8 > len(data) {
+		return errors.New("invalid entry data")
+	}
 
 	tag := data[8:int(math.Min(8+float64(tfe.Length), float64(len(data))))]
 

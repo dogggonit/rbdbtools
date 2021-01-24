@@ -33,7 +33,7 @@ type TagLib struct {
 
 var GetTrackError = errors.New("failed to get tracks")
 
-func New(filename string) (database.TrackData, error) {
+func New(filename string) (database.MetaData, error) {
 	cs := C.CString(filename)
 	defer C.free(unsafe.Pointer(cs))
 
@@ -46,19 +46,19 @@ func New(filename string) (database.TrackData, error) {
 	return cTrackToTrack(t)
 }
 
-func NewTracks(filenames ...string) ([]database.TrackData, error) {
+func NewTracks(filenames ...string) ([]database.MetaData, error) {
 	cFilenames, cleanup := toCharStarStar(filenames)
 	defer cleanup()
 
 	cTracks := C.getTracks(cFilenames, C.size_t(len(filenames)))
 	if cTracks == nil {
-		var t [0]database.TrackData
+		var t [0]database.MetaData
 		return t[:], GetTrackError
 	}
 	defer C.freeTracks(cTracks)
 
 	numTracks := int(cTracks.size)
-	tracks := make([]database.TrackData, numTracks)
+	tracks := make([]database.MetaData, numTracks)
 	for i, e := range ((*[1 << 30]*C.struct_track)(unsafe.Pointer(cTracks.tracks)))[:numTracks:numTracks] {
 		var err error
 		tracks[i], err = cTrackToTrack(e)
@@ -70,6 +70,7 @@ func NewTracks(filenames ...string) ([]database.TrackData, error) {
 	return tracks, nil
 }
 
+// toCharStarStar converts a go slice of strings to a c array of c strings
 func toCharStarStar(a []string) (**C.char, func()) {
 	cA := C.malloc(C.size_t(len(a)) * C.size_t(unsafe.Sizeof(uintptr(0))))
 
@@ -86,7 +87,8 @@ func toCharStarStar(a []string) (**C.char, func()) {
 	}
 }
 
-func cTrackToTrack(track *C.struct_track) (database.TrackData, error) {
+// cTrackToTrack converts a struct track to a database.MetaData
+func cTrackToTrack(track *C.struct_track) (database.MetaData, error) {
 	if track == nil {
 		return &TagLib{}, errors.New("cannot get info from null track")
 	}
@@ -127,6 +129,7 @@ func cTrackToTrack(track *C.struct_track) (database.TrackData, error) {
 	return t, nil
 }
 
+// getMTime gets the mtime of a file, in unix milliseconds, as an int32
 func getMTime(filename string) (int32, error) {
 	file, err := os.Stat(filename)
 	if err != nil {

@@ -13,3 +13,6 @@ bin/rbdbdump
 *.csv
 *.xlsx
 *.json
+
+## default directories
+csv/

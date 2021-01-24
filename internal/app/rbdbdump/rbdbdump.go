@@ -1,21 +1,34 @@
 package rbdbdump
 
 import (
-	"os"
-	"rbdbtools/tools"
+	"log"
+	"rbdbtools/pkg/database"
+	"rbdbtools/pkg/xlsxdb"
 )
 
 func Rbdbdump(dbPath string, outPath string, toCsv bool) {
-	if !tools.DirExists(outPath) {
-		err := os.MkdirAll(outPath, os.ModePerm)
-		if err != nil {
-			log.Fatal(err)
-		}
+	dbFiles, err := database.GetTagCacheFiles(dbPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	db, err := dbFiles.ToDatabase()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	xlsx, err := xlsxdb.New(db)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	if toCsv {
-		csv(dbPath, outPath)
+		err = xlsx.WriteCSV(outPath)
 	} else {
-		toXlsx(dbPath, outPath)
+		err = xlsx.WriteXlsx(outPath)
+	}
+
+	if err != nil {
+		log.Fatal(err)
 	}
 }

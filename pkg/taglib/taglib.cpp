@@ -1,4 +1,4 @@
-#include "taglib.h"
+#include "tags.h"
 
 #include <stdlib.h>
 #include <taglib/fileref.h>

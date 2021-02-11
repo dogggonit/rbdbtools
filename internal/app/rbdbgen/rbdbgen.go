@@ -8,7 +8,7 @@ import (
 	"rbdbtools/pkg/cache"
 	"rbdbtools/pkg/database"
 	"rbdbtools/pkg/logger"
-	"rbdbtools/tools"
+	//"rbdbtools/tools"
 	"regexp"
 	"time"
 )
@@ -36,7 +36,7 @@ func Rbdbgen(bigEndian bool, targetDir string, internalTrackDir string, external
 
 	log.Info("Starting...")
 	defer timer(time.Now())
-
+/*
 	db := database.New(bigEndian)
 
 	oldCacheSize, newCacheSize := 0, 0
@@ -82,6 +82,7 @@ func Rbdbgen(bigEndian bool, targetDir string, internalTrackDir string, external
 	}
 
 	log.Infof("DB Size: %s", tools.BytesToFormalSize(db.Size()))
+*/
 }
 
 type loadTracksIntoDBParams struct {
@@ -108,16 +109,16 @@ func loadTracksIntoDB(params loadTracksIntoDBParams) (int, int) {
 	oldSize := c.Size()
 
 	log.Infof("Adding %s storage tracks from '%s'", locationName, params.tracksPath)
-	fileList, err := getTracks(params.tracksPath)
+	//fileList, err := getTracks(params.tracksPath)
 	if err != nil {
 		log.Error(err)
 	}
 
 	log.Info("Getting tags for tracks...")
-	tagList, err := getTags(fileList, c)
+	//tagList, err := getTags(fileList, c)
 
 	log.Info("Adding tracks to database...")
-	params.database.Add(tagList...)
+	//params.database.Add(tagList...)
 
 	log.Info("Saving cache...")
 	err = c.Save()
@@ -153,12 +154,13 @@ func getTracks(root string) ([]string, error) {
 	return tracks, err
 }
 
-func getTags(tracks []string, cache cache.Cache) ([]database.Track, error) {
-	t := make([]database.Track, 0)
+func getTags(tracks []string, cache cache.Cache) ([]database.MetaData, error) {
+	t := make([]database.MetaData, 0)
 	for i := 0; i < len(tracks); {
 		end := int(math.Min(float64(len(tracks)), float64(i+getTrackIncrement)))
 
 		log.Infof("Getting tags for %d tracks...", end-i)
+		/*
 		tags, err, cached := cache.Add(tracks[i:end]...)
 		t = append(t, tags...)
 
@@ -169,7 +171,7 @@ func getTags(tracks []string, cache cache.Cache) ([]database.Track, error) {
 		} else {
 			log.Infof("%d tags were already cached", cached)
 		}
-
+*/
 		i = end
 	}
 	return t, nil

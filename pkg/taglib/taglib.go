@@ -3,7 +3,7 @@ package taglib
 // #cgo pkg-config: taglib
 // #cgo LDFLAGS: -ltag
 // #include <stdlib.h>
-// #include "taglib.h"
+// #include "tags.h"
 import "C"
 
 import (
